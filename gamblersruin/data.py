@@ -1,5 +1,6 @@
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
 import pandas as pd
 import penaltyblog as pb
@@ -48,3 +49,23 @@ def attach_odds(history: pd.DataFrame, odds: pd.DataFrame) -> pd.DataFrame:
 
 def missing_odds(matches: pd.DataFrame) -> pd.Series:
     return matches[ODDS_COLUMNS].isna().any(axis=1)
+
+
+def snapshot(path: str | Path, fetch: Callable[[], pd.DataFrame]) -> pd.DataFrame:
+    """The matches saved at ``path``, saving ``fetch()`` there first if the file does not exist.
+
+    A snapshot keeps results from changing as the season goes on or Understat revises its xG;
+    delete the file to take a new one.
+    """
+    path = Path(path)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fetch().to_csv(path)
+    # read back even right after saving, so the first run sees exactly what later runs will; ids
+    # stay strings, dates dates, and floats bit for bit (the default parser can be off by an ulp)
+    matches = pd.read_csv(
+        path, index_col="id", parse_dates=["datetime"], dtype={"id": "str", "understat_id": "str"},
+        float_precision="round_trip",
+    )
+    matches["date"] = pd.to_datetime(matches["date"]).dt.date
+    return matches

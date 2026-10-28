@@ -1,9 +1,11 @@
+import datetime
+
 import numpy as np
 import pandas as pd
 import pytest
 
 import gamblersruin.data as data
-from gamblersruin.data import ODDS_COLUMNS, TEAM_NAMES, attach_odds, fetch_history, fetch_odds, missing_odds
+from gamblersruin.data import ODDS_COLUMNS, TEAM_NAMES, attach_odds, fetch_history, fetch_odds, missing_odds, snapshot
 
 
 def fixtures(ids, **columns):
@@ -37,6 +39,31 @@ def test_attach_odds_rejects_duplicate_match_ids(duplicated):
         odds = pd.concat([odds, odds.iloc[:1]])
     with pytest.raises(ValueError, match="duplicate"):
         attach_odds(history, odds)
+
+
+def test_snapshot_fetches_once_and_reads_back_the_same_frame(tmp_path):
+    matches = fixtures(
+        ["1628812800---brentford---arsenal", "1628899200---burnley---brighton"],
+        understat_id=["16376", "007"],  # would read back as numbers
+        datetime=pd.to_datetime(["2021-08-13 19:00", "2021-08-14 14:00"]),
+        date=[datetime.date(2021, 8, 13), datetime.date(2021, 8, 14)],
+        team_home=["Brentford", "Burnley"],
+        goals_home=[2, 1],
+        xg_home=[1.88818, 0.1 + 0.2],  # must come back bit for bit
+        avg_h=[4.02, np.nan],
+    )
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        return matches
+
+    path = tmp_path / "data" / "snapshot.csv"
+    first, second = snapshot(path, fetch), snapshot(path, fetch)
+
+    assert len(calls) == 1
+    pd.testing.assert_frame_equal(first, matches, check_exact=True)
+    pd.testing.assert_frame_equal(second, matches, check_exact=True)
 
 
 def test_missing_odds_flags_any_missing_column():

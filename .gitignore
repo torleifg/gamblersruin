@@ -7,3 +7,5 @@ venv/
 
 .DS_store
 .python-version
+
+data/

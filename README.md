@@ -14,7 +14,8 @@ average's odds, with the bookmakers' margin removed, both before the round (pre-
 Every prediction is made only from matches played before it, and each gap to the market comes with a paired 95%
 interval, so a difference within noise is reported as one.
 
-Over five Premier League seasons, 2022-23 to 2026-27 (1,600 matches, the last season in progress), the model scores
+Over five Premier League seasons, 2022-23 to 2026-27 (1,600 matches, the last season up to 25 October 2026), the model
+scores
 0.2018 RPS, against 0.1968 for the market before closing, 0.1951 at closing and 0.2321 for league frequencies (lower is
 better). 2021-22 is only a warm-up: the season before it was played without crowds, with more away wins than home wins,
 and the model would carry that into it. The model covers about 86% of the distance from that naive baseline to the
@@ -89,7 +90,10 @@ pip install -r requirements.txt
 The model lives in the `gamblersruin` package and is run from the notebooks in the root folder.
 
 - `backtest.ipynb` scores the model against the market over five Premier League seasons and produces the numbers above.
-  To backtest another league, set `LEAGUE` to its name in `LEAGUES` (`gamblersruin/odds.py`) and add any team names that
+  It reads matches and odds from a snapshot in `data/`, named after the league and seasons, so the numbers do not move
+  as the season goes on or Understat revises its xG. When there is no snapshot it fetches the data and saves one; delete
+  the file to take a new snapshot. Snapshots are kept out of git, so a fresh clone takes its own, with the matches played
+  by then. To backtest another league, set `LEAGUE` to its name in `LEAGUES` (`gamblersruin/odds.py`) and add any team names that
   differ between Understat and football-data to `TEAM_NAMES` (`gamblersruin/data.py`); the notebook prints how many
   matches it leaves out for missing odds.
 - `predict.ipynb` predicts the matches of a given day in all five leagues (set `DAY` in the first cell) and compares
