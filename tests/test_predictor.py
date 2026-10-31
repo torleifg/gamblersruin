@@ -53,3 +53,8 @@ def test_with_ev_adds_odds_and_expected_value_without_mutating(predictor):
     result = with_ev(table, (2.0, 3.5, 4.0))
     assert "odds" not in table.columns
     assert result["EV (model)"].tolist() == (table["model"] * [2.0, 3.5, 4.0] - 1).round(3).tolist()
+
+
+def test_known_teams_come_from_the_calculator(predictor):
+    assert predictor.known_teams == predictor.calc.known_teams
+    assert predictor.calc.unknown_teams("Arsenal", "Arsenel") == ["Arsenel"]

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pandas as pd
 import penaltyblog as pb
 
-from gamblersruin.strength import Strength, StrengthConfig, StrengthCalculator
+from gamblersruin.strength import Strength, StrengthCalculator, StrengthConfig
 
 
 @dataclass(frozen=True)
@@ -45,27 +45,34 @@ class MatchPredictor:
         self.matches = matches
         self.seasons = list(seasons)
         self.calc = StrengthCalculator(matches, config)
-        self.known_teams = sorted(set(matches.team_home) | set(matches.team_away))
-        last_season = matches[matches.season == self.seasons[0]]
-        self._last_season_teams = set(last_season.team_home) | set(last_season.team_away)
+
+    @property
+    def known_teams(self) -> list[str]:
+        return self.calc.known_teams
 
     def check_known(self, *teams: str) -> None:
-        for team in teams:
-            if team not in self.known_teams:
-                close = difflib.get_close_matches(team, self.known_teams, n=3)
-                raise ValueError(f"Unknown team {team!r}. Did you mean {close or self.known_teams}?")
+        """Raise for unknown names; unlike the calculator, which only warns, a prediction needs history."""
+        for team in self.calc.unknown_teams(*teams):
+            close = difflib.get_close_matches(team, self.known_teams, n=3)
+            raise ValueError(f"Unknown team {team!r}. Did you mean {close or self.known_teams}?")
 
-    def promoted_warnings(self, *teams: str) -> list[str]:
+    def promoted_warnings(self, *teams: str, kickoff=None) -> list[str]:
         """Warnings for teams that were not in the league last season."""
+        promoted = self.calc.promoted_teams(*teams, as_of=self._cutoff(kickoff), season=self.seasons)
         warnings = []
-        for team in teams:
-            if team not in self._last_season_teams:  # e.g. promoted: strength rests on the prior and this season
-                played = ((self.matches.team_home == team) | (self.matches.team_away == team)).sum()
-                warnings.append(
-                    f"WARNING: {team} was not in the league in {self.seasons[0]}; "
-                    f"its strength is the promoted-side prior plus only {played} match(es) this season"
-                )
+        for team in promoted:  # strength rests on the promoted-side prior and this season's matches
+            played = ((self.matches.team_home == team) | (self.matches.team_away == team)).sum()
+            warnings.append(
+                f"WARNING: {team} was not in the league in {self.seasons[0]}; "
+                f"its strength is the promoted-side prior plus only {played} match(es) this season"
+            )
         return warnings
+
+    def _cutoff(self, kickoff) -> pd.Timestamp:
+        """``kickoff``, or just after the last played match when None, since the calculator only uses matches strictly before it."""
+        if kickoff is None:
+            return self.matches.datetime.max() + pd.Timedelta(seconds=1)
+        return pd.Timestamp(kickoff)
 
     def predict(self, home: str, away: str, kickoff=None, odds=None) -> MatchPrediction:
         """Probabilities for a match that has not been played yet.
@@ -75,13 +82,10 @@ class MatchPredictor:
                  probabilities.
         """
         self.check_known(home, away)
-        if kickoff is None:  # the calculator only uses matches strictly before kickoff
-            kickoff = self.matches.datetime.max() + pd.Timedelta(seconds=1)
-        kickoff = pd.Timestamp(kickoff)
+        kickoff = self._cutoff(kickoff)
 
-        strength_home, strength_away = self.calc.strengths(home, away, kickoff, season=self.seasons)
-        grid = self.calc.predict(home, away, kickoff, season=self.seasons)
-        lambda_home, lambda_away = self.calc.expected_goals(home, away, kickoff, season=self.seasons)
+        rates = self.calc.rates(home, away, kickoff, season=self.seasons)
+        grid = self.calc.grid(rates.lambda_home, rates.lambda_away)
 
         table = pd.DataFrame({"model": grid.home_draw_away}, index=[f"{home} win", "Draw", f"{away} win"])
         margin = None
@@ -95,7 +99,7 @@ class MatchPredictor:
             ((grid.exact_score(h, a), f"{h}-{a}") for h in range(6) for a in range(6)), reverse=True
         )[:5]
         return MatchPrediction(
-            home, away, kickoff, strength_home, strength_away, lambda_home, lambda_away,
+            home, away, kickoff, rates.strength_home, rates.strength_away, rates.lambda_home, rates.lambda_away,
             top_scores, table.round(3), margin,
         )
 

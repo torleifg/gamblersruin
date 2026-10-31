@@ -299,3 +299,21 @@ def test_config_validation(kwargs):
 def test_missing_columns_raise():
     with pytest.raises(ValueError, match="missing required columns"):
         StrengthCalculator(uniform_league().drop(columns=["xg_home"]))
+
+
+def test_rates_match_strengths_and_expected_goals():
+    calc = StrengthCalculator(random_league(seed=4))
+    rates = calc.rates("A", "B", AS_OF)
+    assert (rates.strength_home, rates.strength_away) == calc.strengths("A", "B", AS_OF)
+    assert (rates.lambda_home, rates.lambda_away) == calc.expected_goals("A", "B", AS_OF)
+    assert calc.grid(rates.lambda_home, rates.lambda_away).home_draw_away == pytest.approx(
+        calc.predict("A", "B", AS_OF).home_draw_away
+    )
+
+
+def test_promoted_teams_are_those_missing_from_earlier_seasons():
+    df, _ = promoted_league()
+    calc = StrengthCalculator(df)
+    seasons = sorted(df["season"].unique())
+    assert calc.promoted_teams("A", "E", as_of=AS_OF, season=seasons) == ["E"]
+    assert calc.promoted_teams("A", "E", as_of=AS_OF, season=seasons[-1]) == []

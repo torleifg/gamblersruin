@@ -67,6 +67,14 @@ class Strength:
     defense: float
 
 
+@dataclass(frozen=True)
+class MatchRates:
+    strength_home: Strength
+    strength_away: Strength
+    lambda_home: float  # expected goals
+    lambda_away: float
+
+
 def blend(goals: float, xg: float, goals_weight: float) -> float:
     """``xg + w * (goals - xg)``: xG-anchored average, nudged towards actual goals."""
     return xg + goals_weight * (goals - xg)
@@ -112,46 +120,59 @@ class StrengthCalculator:
         for col in _NUMERIC_COLUMNS:
             df[col] = df[col].astype(float)
         self.config = config
-        self._teams = set(df["team_home"]) | set(df["team_away"])
+        self.known_teams = sorted(set(df["team_home"]) | set(df["team_away"]))
         self._matches = df.sort_values("datetime", kind="stable").reset_index(drop=True)
+
+    def rates(
+            self, home: str, away: str, as_of, season: str | Sequence[str] | None = None
+    ) -> MatchRates:
+        """Both teams' strengths and the expected goals they imply, from matches before ``as_of``."""
+        self._check_known(home, away)
+        return self._rates(home, away, as_of, season)
 
     def strengths(
             self, home: str, away: str, as_of, season: str | Sequence[str] | None = None
     ) -> tuple[Strength, Strength]:
         """(home team's home strength, away team's away strength) using matches before ``as_of``."""
         self._check_known(home, away)
-        prior, established = self._prior_matches(as_of, season)
-        return (
-            self._team_strength(prior, home, "home", established),
-            self._team_strength(prior, away, "away", established),
-        )
+        rates = self._rates(home, away, as_of, season)
+        return rates.strength_home, rates.strength_away
 
     def expected_goals(
             self, home: str, away: str, as_of, season: str | Sequence[str] | None = None
     ) -> tuple[float, float]:
         self._check_known(home, away)
-        prior, established = self._prior_matches(as_of, season)
-        strength_home = self._team_strength(prior, home, "home", established)
-        strength_away = self._team_strength(prior, away, "away", established)
-        # strengths are ratios to the league average, so scale by the league's mean goals per side
-        return (
-            strength_home.attack * strength_away.defense * prior["goals_home"].mean(),
-            strength_away.attack * strength_home.defense * prior["goals_away"].mean(),
-        )
+        rates = self._rates(home, away, as_of, season)
+        return rates.lambda_home, rates.lambda_away
 
     def predict(
             self, home: str, away: str, as_of, season: str | Sequence[str] | None = None
     ) -> FootballProbabilityGrid:
-        lambda_home, lambda_away = self.expected_goals(home, away, as_of, season)
-        matrix = dixon_coles_matrix(
-            lambda_home, lambda_away, self.config.rho, self.config.max_goals
-        )
+        self._check_known(home, away)
+        rates = self._rates(home, away, as_of, season)
+        return self.grid(rates.lambda_home, rates.lambda_away)
+
+    def grid(self, lambda_home: float, lambda_away: float) -> FootballProbabilityGrid:
+        """Score probabilities for the expected goals."""
+        matrix = dixon_coles_matrix(lambda_home, lambda_away, self.config.rho, self.config.max_goals)
         return FootballProbabilityGrid(
             goal_matrix=matrix,
             home_goal_expectation=lambda_home,
             away_goal_expectation=lambda_away,
             normalize=True,  # the grid stops at max_goals and tau reweights cells, so it no longer sums to 1
         )
+
+    def unknown_teams(self, *teams: str) -> list[str]:
+        """The names absent from the whole dataset."""
+        return [t for t in teams if t not in self.known_teams]
+
+    def promoted_teams(self, *teams: str, as_of, season: str | Sequence[str] | None = None) -> list[str]:
+        """The teams that count as promoted for a fixture: absent from the earlier season(s) in ``season``.
+
+        This is the test ``_team_strength`` applies; none count when there are no earlier-season matches.
+        """
+        _, established = self._prior_matches(as_of, season)
+        return [] if established is None else [t for t in teams if t not in established]
 
     def _check_known(self, *teams: str) -> None:
         """Warn about names absent from the whole dataset.
@@ -160,7 +181,7 @@ class StrengthCalculator:
         average), which is right for a newly promoted side but silently wrong for a typo or a
         naming mismatch.
         """
-        unknown = [t for t in teams if t not in self._teams]
+        unknown = self.unknown_teams(*teams)
         if unknown:
             warnings.warn(
                 f"Unknown team(s) {unknown}: not in matches, using prior strengths. "
@@ -168,6 +189,18 @@ class StrengthCalculator:
                 UserWarning,
                 stacklevel=3,
             )
+
+    def _rates(self, home: str, away: str, as_of, season: str | Sequence[str] | None) -> MatchRates:
+        prior, established = self._prior_matches(as_of, season)
+        strength_home = self._team_strength(prior, home, "home", established)
+        strength_away = self._team_strength(prior, away, "away", established)
+        # strengths are ratios to the league average, so scale by the league's mean goals per side
+        return MatchRates(
+            strength_home,
+            strength_away,
+            strength_home.attack * strength_away.defense * prior["goals_home"].mean(),
+            strength_away.attack * strength_home.defense * prior["goals_away"].mean(),
+        )
 
     def _prior_matches(
             self, as_of, season: str | Sequence[str] | None
